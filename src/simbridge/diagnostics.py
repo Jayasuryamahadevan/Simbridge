@@ -5,18 +5,31 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Sequence
 
 OUTPUT_LIMIT = 4_000
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    command: tuple[str, ...]
+    available: bool
+    exit_code: int | None
+    output: str
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.available and self.exit_code == 0 and self.error is None
+
+
 def run_probe(
     command: Sequence[str],
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> dict[str, object]:
+) -> CommandResult:
     """Run a bounded diagnostic command without a shell."""
     args = tuple(str(part) for part in command)
     if not args:
@@ -24,10 +37,7 @@ def run_probe(
 
     executable = shutil.which(args[0])
     if executable is None:
-        return {
-            "command": list(args), "available": False, "exit_code": None,
-            "output": "", "error": f"{args[0]} was not found on PATH",
-        }
+        return CommandResult(args, False, None, "", f"{args[0]} was not found on PATH")
 
     try:
         completed = subprocess.run(
@@ -40,15 +50,11 @@ def run_probe(
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return {
-            "command": list(args), "available": True, "exit_code": None,
-            "output": "", "error": f"Command timed out after {timeout:g} seconds",
-        }
+        return CommandResult(
+            args, True, None, "", f"Command timed out after {timeout:g} seconds"
+        )
     except OSError as exc:
-        return {
-            "command": list(args), "available": True, "exit_code": None,
-            "output": "", "error": f"{type(exc).__name__}: {exc}",
-        }
+        return CommandResult(args, True, None, "", f"{type(exc).__name__}: {exc}")
 
     output = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
@@ -57,13 +63,7 @@ def run_probe(
     if len(output) > OUTPUT_LIMIT:
         output = output[:OUTPUT_LIMIT] + "\n… output truncated …"
 
-    return {
-        "command": list(args),
-        "available": True,
-        "exit_code": completed.returncode,
-        "output": output,
-        "error": None,
-    }
+    return CommandResult(args, True, completed.returncode, output)
 
 
 def _os_summary() -> dict[str, str]:
@@ -100,7 +100,7 @@ def collect_diagnostics() -> dict[str, object]:
         ("pipewire_service", ("systemctl", "--user", "is-active", "pipewire.service")),
         ("wireplumber_service", ("systemctl", "--user", "is-active", "wireplumber.service")),
     )
-    checks = {name: run_probe(command) for name, command in probes}
+    checks = {name: asdict(run_probe(command)) for name, command in probes}
     required_tools = ("bluetoothctl", "wpctl", "systemctl")
     missing_tools = [tool for tool in required_tools if shutil.which(tool) is None]
     is_linux = platform.system() == "Linux"
