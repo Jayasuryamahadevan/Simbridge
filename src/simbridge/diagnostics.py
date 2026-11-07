@@ -5,31 +5,18 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Sequence
 
 OUTPUT_LIMIT = 4_000
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    command: tuple[str, ...]
-    available: bool
-    exit_code: int | None
-    output: str
-    error: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return self.available and self.exit_code == 0 and self.error is None
-
-
 def run_probe(
     command: Sequence[str],
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> CommandResult:
+) -> dict[str, object]:
     """Run a bounded diagnostic command without a shell."""
     args = tuple(str(part) for part in command)
     if not args:
@@ -37,7 +24,10 @@ def run_probe(
 
     executable = shutil.which(args[0])
     if executable is None:
-        return CommandResult(args, False, None, "", f"{args[0]} was not found on PATH")
+        return {
+            "command": list(args), "available": False, "exit_code": None,
+            "output": "", "error": f"{args[0]} was not found on PATH",
+        }
 
     try:
         completed = subprocess.run(
@@ -50,11 +40,15 @@ def run_probe(
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return CommandResult(
-            args, True, None, "", f"Command timed out after {timeout:g} seconds"
-        )
+        return {
+            "command": list(args), "available": True, "exit_code": None,
+            "output": "", "error": f"Command timed out after {timeout:g} seconds",
+        }
     except OSError as exc:
-        return CommandResult(args, True, None, "", f"{type(exc).__name__}: {exc}")
+        return {
+            "command": list(args), "available": True, "exit_code": None,
+            "output": "", "error": f"{type(exc).__name__}: {exc}",
+        }
 
     output = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
@@ -63,7 +57,13 @@ def run_probe(
     if len(output) > OUTPUT_LIMIT:
         output = output[:OUTPUT_LIMIT] + "\n… output truncated …"
 
-    return CommandResult(args, True, completed.returncode, output)
+    return {
+        "command": list(args),
+        "available": True,
+        "exit_code": completed.returncode,
+        "output": output,
+        "error": None,
+    }
 
 
 def _os_summary() -> dict[str, str]:
@@ -100,10 +100,17 @@ def collect_diagnostics() -> dict[str, object]:
         ("pipewire_service", ("systemctl", "--user", "is-active", "pipewire.service")),
         ("wireplumber_service", ("systemctl", "--user", "is-active", "wireplumber.service")),
     )
-    checks = {name: asdict(run_probe(command)) for name, command in probes}
+    checks = {name: run_probe(command) for name, command in probes}
     required_tools = ("bluetoothctl", "wpctl", "systemctl")
     missing_tools = [tool for tool in required_tools if shutil.which(tool) is None]
     is_linux = platform.system() == "Linux"
+    service_keys = ("bluetooth_service", "pipewire_service", "wireplumber_service")
+    services_active = {
+        key: checks[key]["available"]
+        and checks[key]["exit_code"] == 0
+        and checks[key]["error"] is None
+        for key in service_keys
+    }
 
     return {
         "os": _os_summary(),
@@ -111,6 +118,7 @@ def collect_diagnostics() -> dict[str, object]:
         "required_tools_missing": missing_tools,
         "checks": checks,
         "host_tools_ready": is_linux and not missing_tools,
+        "services_active": services_active,
         "hfp_verified": False,
         "notes": [
             "Installed tools do not prove Bluetooth HFP call audio is available.",
@@ -130,11 +138,12 @@ def format_diagnostics(report: dict[str, object]) -> str:
         f"Kernel: {os_info.get('release', 'unknown')} ({os_info.get('machine', 'unknown')})",
         f"Python: {os_info.get('python', 'unknown')}",
         "",
-        "Host readiness:",
+        "Host tools:",
         f"  {'PASS' if report['host_tools_ready'] else 'CHECK'}  Required Linux tools",
     ]
-    if report["required_tools_missing"]:
-        lines.append(f"        Missing: {', '.join(report['required_tools_missing'])}")
+    missing = report["required_tools_missing"]
+    if missing:
+        lines.append(f"        Missing: {', '.join(missing)}")
 
     checks = report["checks"]
     assert isinstance(checks, dict)
@@ -151,13 +160,19 @@ def format_diagnostics(report: dict[str, object]) -> str:
         "pipewire_service": "PipeWire user service",
         "wireplumber_service": "WirePlumber user service",
     }
+
     lines.extend(["", "Detected components:"])
     for key, label in labels.items():
         item = checks[key]
-        available = bool(item["available"])
+        if not item["available"]:
+            status = "MISSING"
+        elif item["error"] or item["exit_code"] != 0:
+            status = "CHECK"
+        else:
+            status = "OK"
         output = str(item["output"]).splitlines()
-        first_line = output[0] if output else (item["error"] or "No response")
-        lines.append(f"  {'FOUND' if available else 'MISSING':7} {label}: {first_line[:180]}")
+        detail = output[0] if output else (item["error"] or "No response")
+        lines.append(f"  {status:7} {label}: {detail[:180]}")
 
     lines.extend([
         "",
