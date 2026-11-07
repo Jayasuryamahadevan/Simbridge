@@ -1,0 +1,14 @@
+[bluetooth]
+adapter = "auto"
+auto_connect = false
+
+[audio]
+sample_rate_hz = 16000
+channels = 1
+sample_width_bytes = 2
+frame_duration_ms = 20
+max_buffer_frames = 5
+record_audio = false
+
+[security]
+allow_remote_control = false
