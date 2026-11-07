@@ -8,6 +8,7 @@ import sys
 from typing import Sequence
 
 from simbridge import __version__
+from simbridge.bluetooth.profiles import format_bluetooth_profiles
 from simbridge.diagnostics import collect_diagnostics, format_diagnostics, run_probe
 
 
@@ -29,6 +30,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bluetooth_commands = bluetooth.add_subparsers(dest="bluetooth_command", required=True)
     bluetooth_commands.add_parser("devices", help="list known Bluetooth devices")
     bluetooth_commands.add_parser("controller", help="show Bluetooth controller details")
+    bluetooth_commands.add_parser("profiles", help="inspect Bluetooth HFP/HSP audio profiles")
 
     audio = commands.add_parser("audio", help="inspect the PipeWire audio graph")
     audio_commands = audio.add_subparsers(dest="audio_command", required=True)
@@ -50,6 +52,18 @@ def _print_probe(title: str, command: tuple[str, ...]) -> int:
     return 0 if result.exit_code == 0 else 1
 
 
+def _print_bluetooth_profiles() -> int:
+    result = run_probe(("pactl", "list", "cards"))
+    if not result.available or result.error:
+        print(result.error or "pactl is unavailable.")
+        return 2
+    if result.exit_code != 0:
+        print(result.output or "Could not query PipeWire Bluetooth card profiles.")
+        return 1
+    print(format_bluetooth_profiles(result.output))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -62,7 +76,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "bluetooth":
             if args.bluetooth_command == "devices":
                 return _print_probe("Known Bluetooth devices", ("bluetoothctl", "devices"))
-            return _print_probe("Bluetooth controller", ("bluetoothctl", "show"))
+            if args.bluetooth_command == "controller":
+                return _print_probe("Bluetooth controller", ("bluetoothctl", "show"))
+            return _print_bluetooth_profiles()
 
         if args.command == "audio":
             graph_code = _print_probe("PipeWire graph", ("wpctl", "status"))

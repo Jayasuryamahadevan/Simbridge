@@ -11,6 +11,7 @@ The initial software foundation is implemented. Actual cellular-call audio is no
 - [x] Project structure and Python package
 - [x] Read-only Linux, BlueZ and PipeWire diagnostics
 - [x] Bluetooth controller and known-device inspection
+- [x] HFP/HSP profile inspection from PipeWire card data
 - [x] Canonical PCM frame contract and bounded frame buffer
 - [x] Explicit call/audio readiness state machine
 - [x] Unit tests and GitHub Actions CI
@@ -34,7 +35,7 @@ The initial software foundation is implemented. Actual cellular-call audio is no
 - An Android phone that exposes the Bluetooth Hands-Free Profile (HFP) to the Linux host.
 - Python 3.11 or newer.
 
-Bluetooth pairing alone does not prove that HFP call audio is available. SimBridge's doctor command reports local capabilities; an actual test call is required to verify the phone, negotiated profile, and bidirectional audio.
+Bluetooth pairing alone does not prove that HFP call audio is available. Profile inspection reports what PipeWire advertises; an actual test call is still required to verify the phone, negotiated profile, and bidirectional audio.
 
 ## Quick start
 
@@ -57,6 +58,7 @@ simbridge doctor --json
 simbridge status
 simbridge bluetooth devices
 simbridge bluetooth controller
+simbridge bluetooth profiles
 simbridge audio devices
 ```
 
